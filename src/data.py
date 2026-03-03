@@ -51,23 +51,29 @@ def _assert_expected_columns(df: pd.DataFrame, required: List[str]) -> None:
 
 
 def _class_balance(y: pd.Series) -> Dict[int, float]:
-    # y is expected to be 0/1 ints
     vc = y.value_counts(normalize=True).to_dict()
     return {int(k): float(v) for k, v in vc.items()}
 
 
-def _assert_no_index_overlap(*dfs_or_series: pd.core.generic.NDFrame) -> None:
-    idxs = [set(obj.index) for obj in dfs_or_series]
-    for i in range(len(idxs)):
-        for j in range(i + 1, len(idxs)):
-            overlap = idxs[i].intersection(idxs[j])
-            assert len(overlap) == 0, f"Index overlap detected between split {i} and {j}: {len(overlap)} rows overlap."
+def _assert_splits_disjoint(a: pd.core.generic.NDFrame, b: pd.core.generic.NDFrame, c: pd.core.generic.NDFrame) -> None:
+    """
+    Ensures three splits have no overlapping indices.
+    NOTE: We should only compare across splits (train vs val vs test),
+    NOT X_train vs y_train (those SHOULD share indices).
+    """
+    ia, ib, ic = set(a.index), set(b.index), set(c.index)
+    ab = ia.intersection(ib)
+    ac = ia.intersection(ic)
+    bc = ib.intersection(ic)
+    assert len(ab) == 0, f"Index overlap detected: train vs val ({len(ab)} rows)."
+    assert len(ac) == 0, f"Index overlap detected: train vs test ({len(ac)} rows)."
+    assert len(bc) == 0, f"Index overlap detected: val vs test ({len(bc)} rows)."
 
 
 # -----------------------------
 # :02_load_raw_data
 # -----------------------------
-def load_raw_data(path: str = DataConfig().raw_path) -> pd.DataFrame:
+def load_raw_data(path: str) -> pd.DataFrame:
     """
     read CSV
     basic sanity checks
@@ -78,10 +84,6 @@ def load_raw_data(path: str = DataConfig().raw_path) -> pd.DataFrame:
 
     df = pd.read_csv(csv_path)
     assert df.shape[0] > 0 and df.shape[1] > 0, f"Loaded df is empty or malformed: shape={df.shape}"
-
-    required = [DataConfig().target_col, DataConfig().id_col, "TotalCharges"]
-    _assert_expected_columns(df, required)
-
     return df
 
 
@@ -97,14 +99,13 @@ def clean_data(df: pd.DataFrame) -> pd.DataFrame:
     """
     df_clean = df.copy(deep=True)
 
-    # Optional: normalize string whitespace for object columns (safe, no encoding)
+    # Strip whitespace in object columns WITHOUT converting NaNs into "nan" strings.
     obj_cols = df_clean.select_dtypes(include=["object"]).columns
     for c in obj_cols:
-        df_clean[c] = df_clean[c].astype(str).str.strip()
-        # If Telco has blanks, keep them as blank strings for now; imputers will handle later.
+        # Pandas "string" dtype preserves missing values as <NA>
+        df_clean[c] = df_clean[c].astype("string").str.strip()
 
-    # TotalCharges -> numeric
-    # Telco often has " " (blank) which becomes NaN when coerced.
+    # TotalCharges -> numeric (coerce invalid/blank to NaN)
     df_clean["TotalCharges"] = pd.to_numeric(df_clean["TotalCharges"], errors="coerce")
 
     # structural missingness: tenure==0 implies TotalCharges should be 0
@@ -112,9 +113,7 @@ def clean_data(df: pd.DataFrame) -> pd.DataFrame:
         mask_struct = (df_clean["tenure"] == 0) & (df_clean["TotalCharges"].isna())
         df_clean.loc[mask_struct, "TotalCharges"] = 0.0
 
-    # Final dtype assertion
     assert pd.api.types.is_numeric_dtype(df_clean["TotalCharges"]), "TotalCharges must be numeric after cleaning."
-
     return df_clean
 
 
@@ -123,8 +122,8 @@ def clean_data(df: pd.DataFrame) -> pd.DataFrame:
 # -----------------------------
 def build_X_y(
     df_clean: pd.DataFrame,
-    target_col: str = DataConfig().target_col,
-    id_col: str = DataConfig().id_col,
+    target_col: str,
+    id_col: str,
 ) -> Tuple[pd.DataFrame, pd.Series]:
     """
     - map target: Yes→1, No→0
@@ -133,21 +132,17 @@ def build_X_y(
     """
     _assert_expected_columns(df_clean, [target_col, id_col])
 
-    y_raw = df_clean[target_col].astype(str).str.strip()
+    y_raw = df_clean[target_col].astype("string").str.strip()
     y = y_raw.map({"Yes": 1, "No": 0})
 
-    assert y.notna().all(), f"Target mapping produced NaNs. Unique raw target values: {sorted(y_raw.unique().tolist())}"
+    assert y.notna().all(), f"Target mapping produced NaNs. Unique raw target values: {sorted(pd.Series(y_raw).dropna().unique().tolist())}"
     y = y.astype(int)
 
-    # checks: y binary and has both classes
     uniq = sorted(y.unique().tolist())
-    assert uniq == [0, 1], f"y must contain both classes [0,1]. Got {uniq} (maybe only one class present)."
+    assert uniq == [0, 1], f"y must contain both classes [0,1]. Got {uniq}."
 
     X = df_clean.drop(columns=[target_col, id_col])
-
-    # checks: customerID not in X
     assert id_col not in X.columns, f"{id_col} leaked into features."
-
     return X, y
 
 
@@ -169,11 +164,9 @@ def infer_categorical_cols(
 
     cat_cols = [c for c in all_cols if c not in num_set]
 
-    # Assertions required by blueprint
     overlap = set(cat_cols).intersection(num_set)
     assert len(overlap) == 0, f"Overlap between numeric and categorical cols: {sorted(overlap)}"
 
-    # Ensure everything is covered (optional but useful)
     covered = set(cat_cols).union(num_set)
     missing_from_coverage = set(all_cols) - covered
     assert len(missing_from_coverage) == 0, f"Some columns were not categorized: {sorted(missing_from_coverage)}"
@@ -208,8 +201,7 @@ def split_data(
         random_state=random_state,
     )
 
-    # Step 2: split train vs val from the remaining set
-    # We want: train_ratio / (train_ratio + val_ratio) of trainval becomes train
+    # Step 2: split train vs val from trainval
     val_share_of_trainval = val_ratio / (train_ratio + val_ratio)
 
     X_train, X_val, y_train, y_val = train_test_split(
@@ -220,8 +212,10 @@ def split_data(
         random_state=random_state,
     )
 
-    # Checks: no overlap indices
-    _assert_no_index_overlap(X_train, X_val, X_test, y_train, y_val, y_test)
+    # Checks: no overlap indices across splits (X splits)
+    _assert_splits_disjoint(X_train, X_val, X_test)
+    # Checks: no overlap indices across splits (y splits)
+    _assert_splits_disjoint(y_train, y_val, y_test)
 
     # Checks: class balance roughly consistent (simple heuristic)
     base = _class_balance(y)
@@ -229,12 +223,10 @@ def split_data(
     b_val = _class_balance(y_val)
     b_test = _class_balance(y_test)
 
-    # allow small drift; stratification should keep these close
     def _assert_close(name: str, dist: Dict[int, float], tol: float = 0.03) -> None:
         for k in [0, 1]:
             assert abs(dist.get(k, 0.0) - base.get(k, 0.0)) <= tol, (
-                f"Class balance drift too large in {name}. "
-                f"base={base}, {name}={dist}"
+                f"Class balance drift too large in {name}. base={base}, {name}={dist}"
             )
 
     _assert_close("train", b_train)
@@ -272,7 +264,6 @@ def build_preprocessor(
     numeric: median impute + standardize
     categorical: most_frequent impute + one-hot (handle_unknown safe)
     """
-    # assertions
     overlap = set(numeric_cols).intersection(set(categorical_cols))
     assert len(overlap) == 0, f"numeric/categorical overlap: {sorted(overlap)}"
 
@@ -331,7 +322,7 @@ def fit_transform_preprocess(
 
 
 # -----------------------------
-# :08_pytorch_dataloaders (optional)
+# :08_pytorch_dataloaders
 # -----------------------------
 def make_dataloaders(
     X_train_mat: Any,
@@ -350,7 +341,6 @@ def make_dataloaders(
     from torch.utils.data import DataLoader, TensorDataset
 
     def _to_dense_float32(mat: Any) -> np.ndarray:
-        # ColumnTransformer often returns sparse; PyTorch wants dense tensors (unless you handle sparse separately).
         if hasattr(mat, "toarray"):
             mat = mat.toarray()
         return np.asarray(mat, dtype=np.float32)
@@ -358,6 +348,7 @@ def make_dataloaders(
     Xtr = torch.tensor(_to_dense_float32(X_train_mat), dtype=torch.float32)
     Xva = torch.tensor(_to_dense_float32(X_val_mat), dtype=torch.float32)
 
+    # Note: for BCEWithLogitsLoss later you may want float labels, but int is fine for now.
     ytr = torch.tensor(np.asarray(y_train, dtype=np.int64))
     yva = torch.tensor(np.asarray(y_val, dtype=np.int64))
 
@@ -373,9 +364,7 @@ def make_dataloaders(
 # -----------------------------
 # :09_single_entrypoint
 # -----------------------------
-def prepare_data(
-    config: DataConfig = DataConfig(),
-) -> Dict[str, Any]:
+def prepare_data(config: DataConfig = DataConfig()) -> Dict[str, Any]:
     """
     Returns a bundle:
     - X_train_mat, y_train
@@ -385,20 +374,17 @@ def prepare_data(
     - feature_names (optional)
     - numeric_cols, categorical_cols (for debugging)
     """
-    # Load raw (immutable)
     df_raw = load_raw_data(config.raw_path)
 
-    # Clean (no encoding, no split)
-    df_clean = clean_data(df_raw)
+    required = [config.target_col, config.id_col, "TotalCharges"]
+    _assert_expected_columns(df_raw, required)
 
-    # Build X,y (still dataframe + series)
+    df_clean = clean_data(df_raw)
     X_df, y = build_X_y(df_clean, config.target_col, config.id_col)
 
-    # Infer categorical from "all remaining features except numeric"
     numeric_cols = list(config.numeric_cols)
     categorical_cols = infer_categorical_cols(X_df, numeric_cols)
 
-    # Split (stratified)
     splits = split_data(
         X_df,
         y,
@@ -408,7 +394,6 @@ def prepare_data(
         random_state=config.random_state,
     )
 
-    # Preprocessor (fit-on-train only)
     preprocessor = build_preprocessor(numeric_cols, categorical_cols)
 
     X_train_mat, X_val_mat, X_test_mat, feature_names = fit_transform_preprocess(
