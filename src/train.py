@@ -28,7 +28,7 @@ from sklearn.metrics import (
 )
 
 
-# --- import your pipeline ---
+# --- import data pipeline ---
 from src.data import prepare_data, DataConfig
 
 
