@@ -3,7 +3,7 @@
 
 ### Team Members
 - Hien Tran
-- Partner
+- Allen Tarasyuk
 
 ---
 
