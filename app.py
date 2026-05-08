@@ -8,7 +8,7 @@ import streamlit as st
 
 st.set_page_config(page_title="Telco Churn Predictor", layout="wide")
 st.title("Telco Customer Churn Predictor")
-st.caption("Team 22 — predict which customers are likely to leave.")
+st.caption("Team 22: predict which customers are likely to leave.")
 
 
 # -----------------------------
@@ -152,7 +152,7 @@ with tab_single:
 
         c1, c2 = st.columns(2)
         c1.metric("Churn probability", f"{prob:.1%}")
-        c2.metric("Decision", "AT RISK — outreach" if flagged else "Likely to stay")
+        c2.metric("Decision", "AT RISK: outreach" if flagged else "Likely to stay")
         st.progress(prob)
 
 
