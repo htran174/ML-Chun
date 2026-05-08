@@ -21,6 +21,7 @@ from typing import Any, Dict, Tuple
 import numpy as np
 import pandas as pd
 import joblib
+import matplotlib.pyplot as plt
 
 from sklearn.metrics import (
     roc_auc_score,
@@ -33,7 +34,6 @@ from sklearn.metrics import (
 
 
 from src.data import DataConfig, load_raw_data, clean_data, build_X_y, split_data
-
 
 # -----------------------------
 # utils
@@ -90,6 +90,66 @@ def metrics_at_threshold(y_true: np.ndarray, y_prob: np.ndarray, thr: float) -> 
 def cost_from_confusion(fp: int, fn: int, c_fp: float, c_fn: float) -> float:
     return float(fp * c_fp + fn * c_fn)
 
+def save_confusion_matrix_plot(cm, save_path: Path, title: str) -> None:
+    """
+    Saves a clean confusion matrix visualization.
+    """
+    fig, ax = plt.subplots(figsize=(6, 5))
+
+    ax.imshow(cm)
+
+    ax.set_xticks([0, 1])
+    ax.set_yticks([0, 1])
+
+    ax.set_xticklabels(["No Churn", "Churn"])
+    ax.set_yticklabels(["No Churn", "Churn"])
+
+    ax.set_xlabel("Predicted Label")
+    ax.set_ylabel("Actual Label")
+    ax.set_title(title)
+
+    labels = [
+        ["TN", "FP"],
+        ["FN", "TP"]
+    ]
+
+    for i in range(2):
+        for j in range(2):
+            ax.text(
+                j,
+                i,
+                f"{labels[i][j]}\n{cm[i, j]}",
+                ha="center",
+                va="center",
+                fontsize=13,
+                fontweight="bold"
+            )
+
+    fig.tight_layout()
+    fig.savefig(save_path, bbox_inches="tight", dpi=150)
+    plt.close(fig)
+
+def save_threshold_cost_plot(report_df: pd.DataFrame, save_path: Path) -> None:
+    """
+    Plot threshold vs total business cost.
+    """
+    fig, ax = plt.subplots(figsize=(7, 5))
+
+    sorted_df = report_df.sort_values("threshold")
+
+    ax.plot(sorted_df["threshold"], sorted_df["total_cost"])
+
+    best_row = report_df.iloc[0]
+
+    ax.scatter(best_row["threshold"], best_row["total_cost"])
+
+    ax.set_xlabel("Threshold")
+    ax.set_ylabel("Total Cost")
+    ax.set_title("Threshold vs Business Cost")
+
+    fig.tight_layout()
+    fig.savefig(save_path, bbox_inches="tight")
+    plt.close(fig)
 
 # -----------------------------
 # core eval
@@ -200,12 +260,19 @@ def main() -> None:
 
     # Final TEST evaluation using chosen threshold
     test_thr_metrics = metrics_at_threshold(y_test, test_prob, best_thr)
+
+    cm = confusion_matrix(
+        y_test,
+        (test_prob >= best_thr).astype(int))
+    
     test_auc = roc_auc_score(y_test, test_prob)
     test_pr_auc = average_precision_score(y_test, test_prob)
     test_cost = cost_from_confusion(test_thr_metrics["fp"], test_thr_metrics["fn"], c_fp=args.c_fp, c_fn=args.c_fn)
 
     # Save artifacts
     report.to_csv(run_path / "threshold_report.csv", index=False)
+    save_threshold_cost_plot(report, run_path / "threshold_vs_cost.png")
+    save_confusion_matrix_plot(cm, run_path / "confusion_matrix.png", title=f"Confusion Matrix (thr={best_thr:.2f})")
 
     save_json(
         run_path / "best_threshold.json",
@@ -245,6 +312,8 @@ def main() -> None:
     print(f"[SAVED] {run_path / 'threshold_report.csv'}")
     print(f"[SAVED] {run_path / 'best_threshold.json'}")
     print(f"[SAVED] {run_path / 'test_report.json'}")
+    print(f"[SAVED] {run_path / 'threshold_vs_cost.png'}")
+    print(f"[SAVED] {run_path / 'confusion_matrix.png'}")
 
 
 if __name__ == "__main__":
