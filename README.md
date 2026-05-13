@@ -67,3 +67,15 @@ ML-CHUN/
 │
 ├── requirements.txt
 └── README.md
+```
+
+---
+# Project Setup
+
+After you install the requirement you can run the following command 
+
+```text
+python -m src.train
+python -m src.eval --run "runs/$(ls -t runs | head -1)"
+streamlit run app.py
+```
