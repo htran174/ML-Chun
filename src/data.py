@@ -22,6 +22,13 @@ from sklearn.preprocessing import StandardScaler, OneHotEncoder
 # -----------------------------
 # :00_constants
 # -----------------------------
+# This block holds all of the fixed settings for the data pipeline in one place, 
+# such as file paths, the target and ID column names, the random seed, and the 
+# train/validation/test split ratios. Keeping these values together as a frozen 
+# dataclass makes it easier to swap configurations without hunting through the 
+# code, and the frozen flag prevents accidental changes during a run.
+# -----------------------------
+
 @dataclass(frozen=True)
 class DataConfig:
     raw_path: str = "data/raw/telco.csv"
@@ -39,6 +46,13 @@ class DataConfig:
 # -----------------------------
 # helpers (assertions + checks)
 # -----------------------------
+# This block contains small helper functions used throughout the pipeline to 
+# run safety checks, such as confirming that split ratios are valid, that 
+# required columns are present, and that the different data splits do not 
+# share any rows. Pulling these checks into reusable helpers keeps the main 
+# pipeline functions cleaner and makes it easier to catch problems early.
+# -----------------------------
+    
 def _assert_ratios(train_ratio: float, val_ratio: float, test_ratio: float) -> None:
     total = train_ratio + val_ratio + test_ratio
     assert abs(total - 1.0) < 1e-9, f"Split ratios must sum to 1.0, got {total}"
@@ -73,6 +87,12 @@ def _assert_splits_disjoint(a: pd.core.generic.NDFrame, b: pd.core.generic.NDFra
 # -----------------------------
 # :02_load_raw_data
 # -----------------------------
+# This block handles reading the raw CSV file from disk into a dataframe with 
+# no modifications applied yet. A couple of basic sanity checks confirm that 
+# the file actually exists and that the loaded data is not empty, which helps 
+# surface issues like wrong paths or corrupted files right at the start.
+# -----------------------------
+    
 def load_raw_data(path: str) -> pd.DataFrame:
     """
     read CSV
@@ -90,6 +110,15 @@ def load_raw_data(path: str) -> pd.DataFrame:
 # -----------------------------
 # :03_clean_data
 # -----------------------------
+# This block does light cleanup on the raw dataframe before any splitting or 
+# encoding happens. It converts the TotalCharges column to a numeric type, 
+# fills in a known structural gap where customers with zero tenure have blank 
+# charges, and strips extra whitespace from text columns. Encoding and 
+# splitting are intentionally left out here so they can be handled later in 
+# a leakage-free way.
+# -----------------------------
+     
+
 def clean_data(df: pd.DataFrame) -> pd.DataFrame:
     """
     - TotalCharges: convert to numeric (coerce invalid to missing)
@@ -120,6 +149,13 @@ def clean_data(df: pd.DataFrame) -> pd.DataFrame:
 # -----------------------------
 # :04_build_target_and_features
 # -----------------------------
+# This block separates the cleaned dataframe into the feature matrix and the 
+# target column, mapping the Yes/No labels into 1s and 0s along the way. The 
+# customer ID column is also dropped from the features so it cannot be used 
+# by the model by accident, and a check confirms that both classes are present 
+# in the target before moving on.
+# -----------------------------
+
 def build_X_y(
     df_clean: pd.DataFrame,
     target_col: str,
@@ -149,6 +185,13 @@ def build_X_y(
 # -----------------------------
 # :01_schema_definition (categorical derived from remaining feature cols)
 # -----------------------------
+# This block sorts out which columns in the dataset should be treated as 
+# categorical, by taking whatever is left over after the numeric columns 
+# have been set aside. It also runs a couple of safety checks to make sure 
+# no column ends up in both groups and that none of them get accidentally 
+# left out, which helps catch mistakes early before they cause problems later on.
+# -----------------------------
+
 def infer_categorical_cols(
     X_df: pd.DataFrame,
     numeric_cols: List[str],
@@ -177,6 +220,13 @@ def infer_categorical_cols(
 # -----------------------------
 # :05_split_train_val_test
 # -----------------------------
+# This block divides the data into training, validation, and test sets using a 
+# two-step split that keeps the class balance roughly the same across all three 
+# groups. After splitting, it runs checks to confirm the same row does not show 
+# up in more than one set and that the class proportions stay close to the 
+# original, which helps avoid surprises during model training and evaluation.
+# -----------------------------
+
 def split_data(
     X: pd.DataFrame,
     y: pd.Series,
@@ -246,6 +296,15 @@ def split_data(
 # -----------------------------
 # :06_preprocessor_definition (Fit-on-train only)
 # -----------------------------
+# This block sets up the preprocessing steps that will be applied to the feature 
+# columns, using one pipeline for numeric values and another for categorical ones. 
+# Numeric columns get missing values filled in with the median and are then put 
+# on the same scale, while categorical columns are filled with the most common 
+# value and turned into one-hot encoded columns. A small helper handles the 
+# difference between older and newer versions of scikit-learn so the code works 
+# across both.
+# -----------------------------
+
 def _make_onehot() -> OneHotEncoder:
     """
     sklearn version compatibility: OneHotEncoder changed sparse -> sparse_output.
@@ -296,6 +355,14 @@ def build_preprocessor(
 # -----------------------------
 # :07_transform_splits
 # -----------------------------
+# This block applies the preprocessor to the three data splits, but only learns 
+# the transformation rules from the training set. The same rules are then used 
+# to transform the validation and test sets, which keeps information from those 
+# sets from leaking into the training process. The function also tries to grab 
+# the resulting feature names if scikit-learn supports it, since those are 
+# useful for later inspection.
+# -----------------------------
+    
 def fit_transform_preprocess(
     preprocessor: ColumnTransformer,
     X_train: pd.DataFrame,
@@ -324,6 +391,14 @@ def fit_transform_preprocess(
 # -----------------------------
 # :08_pytorch_dataloaders
 # -----------------------------
+# This block takes the processed feature matrices and labels and wraps them in 
+# PyTorch data loaders that can be used for training a neural network. The 
+# feature matrices are converted into dense float tensors, and the training 
+# loader is set to shuffle each epoch while the validation loader keeps its 
+# order fixed. A small helper handles the case where the matrices come in as 
+# sparse arrays and need to be converted before being turned into tensors.
+# -----------------------------
+
 def make_dataloaders(
     X_train_mat: Any,
     y_train: pd.Series,
@@ -364,6 +439,15 @@ def make_dataloaders(
 # -----------------------------
 # :09_single_entrypoint
 # -----------------------------
+# This block ties the whole pipeline together into one function that runs each 
+# step in the right order, starting from the raw CSV and ending with ready-to-use 
+# matrices and the fitted preprocessor. Returning everything as a single bundle 
+# makes it easy to pass the prepared data into a training script without having 
+# to manage all of the intermediate objects separately. The numeric and 
+# categorical column lists are also included in the output so they can be checked 
+# during debugging.
+# -----------------------------
+
 def prepare_data(config: DataConfig = DataConfig()) -> Dict[str, Any]:
     """
     Returns a bundle:
