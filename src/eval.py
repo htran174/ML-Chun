@@ -38,6 +38,14 @@ from src.data import DataConfig, load_raw_data, clean_data, build_X_y, split_dat
 # -----------------------------
 # utils
 # -----------------------------
+# This section groups together small shared helpers that get used throughout 
+# the rest of the file, like reading and writing JSON files, pulling out the 
+# probability scores from a trained model, and turning those scores into a 
+# count of correct and incorrect predictions. None of these do anything fancy 
+# on their own, but pulling them out into their own functions keeps the main 
+# evaluation code easier to follow.
+# -----------------------------
+
 def load_json(path: Path) -> Dict[str, Any]:
     with path.open("r", encoding="utf-8") as f:
         return json.load(f)
@@ -89,6 +97,18 @@ def metrics_at_threshold(y_true: np.ndarray, y_prob: np.ndarray, thr: float) -> 
 
 def cost_from_confusion(fp: int, fn: int, c_fp: float, c_fn: float) -> float:
     return float(fp * c_fp + fn * c_fn)
+
+
+# -----------------------------
+# plotting helpers
+# -----------------------------
+# This section holds the two small functions that draw the picture outputs for 
+# each run, one showing the confusion matrix at the chosen threshold and one 
+# showing how the total cost changes as the threshold moves. Both save their 
+# pictures straight to disk as image files instead of popping them up on screen, 
+# since this script is meant to be run in the background and the pictures get 
+# stored alongside the other run files for looking at later.
+# -----------------------------
 
 def save_confusion_matrix_plot(cm, save_path: Path, title: str) -> None:
     """
@@ -154,6 +174,15 @@ def save_threshold_cost_plot(report_df: pd.DataFrame, save_path: Path) -> None:
 # -----------------------------
 # core eval
 # -----------------------------
+# This block does the main job of picking the best cutoff point for turning 
+# the model's probability scores into yes-or-no predictions. It walks through 
+# a range of possible cutoffs and, for each one, adds up a total cost based 
+# on how many mistakes of each kind were made, since missing a real churner 
+# usually hurts more than flagging someone who would have stayed. The results 
+# get sorted so the cheapest cutoff ends up at the top, with F1 used to break 
+# ties when two cutoffs cost the same.
+# -----------------------------
+
 def threshold_sweep(
     y_true: np.ndarray,
     y_prob: np.ndarray,
@@ -177,6 +206,18 @@ def threshold_sweep(
     df = df.sort_values(["total_cost", "f1"], ascending=[True, False]).reset_index(drop=True)
     return df
 
+
+# -----------------------------
+# main entrypoint
+# -----------------------------
+# This block runs the whole evaluation from start to finish, starting from a 
+# saved run folder and producing all of the reports and pictures that go with 
+# it. It loads the trained model and the preprocessing setup, rebuilds the 
+# same data splits that were used during training, walks through different 
+# cutoffs on the validation set to find the cheapest one, and then uses that 
+# single cutoff on the test set for the final numbers. Everything gets saved 
+# back into the same run folder so each run stays self-contained.
+# -----------------------------
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Evaluate run + tune threshold (cost-based).")
