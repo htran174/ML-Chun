@@ -35,6 +35,14 @@ from src.data import prepare_data, DataConfig
 # -----------------------------
 # utilities
 # -----------------------------
+# This section groups together small shared helpers that get used throughout 
+# the rest of the file, like making sure a folder exists, putting a timestamp 
+# on each run, saving JSON files, and turning the model's raw scores into 
+# probabilities and then into a small report of how well it did at a given 
+# cutoff. None of these do anything fancy on their own, but pulling them out 
+# into their own functions keeps the main training code easier to follow.
+# -----------------------------
+
 def ensure_dir(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
 
@@ -88,6 +96,15 @@ def metrics_at_threshold(y_true: np.ndarray, y_prob: np.ndarray, thr: float) -> 
 # -----------------------------
 # training
 # -----------------------------
+# This section has the two functions that actually do the modeling work, one 
+# that fits a logistic regression on the training data and one that checks 
+# how well the fitted model does on the validation data. Logistic regression 
+# is used here as a simple starting point since it trains quickly and is easy 
+# to make sense of, which makes it a good baseline to compare fancier models 
+# against later on. The validation step only looks at the validation set on 
+# purpose, so the test set stays untouched until the final evaluation.
+# -----------------------------
+
 def train_logreg(
     X_train: Any,
     y_train: np.ndarray,
@@ -134,6 +151,17 @@ def evaluate_on_val(model: LogisticRegression, X_val: Any, y_val: np.ndarray) ->
 # -----------------------------
 # main
 # -----------------------------
+# This block runs the whole training flow from start to finish, starting with 
+# the raw data file and ending with all of the saved files for one training 
+# run. It first prepares the data using the leakage-free pipeline, then fits 
+# the model on the training set, checks how it does on the validation set, 
+# and finally saves the trained model, the preprocessing setup, the settings 
+# that were used, and the validation scores all into the same folder. Picking 
+# a good cutoff for turning probabilities into yes-or-no answers is left for 
+# the evaluation script later, so this file sticks to just training and the 
+# basic validation numbers.
+# -----------------------------
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Train baseline churn model (Logistic Regression).")
     parser.add_argument("--raw-path", type=str, default="data/raw/telco.csv", help="Path to raw telco CSV.")
